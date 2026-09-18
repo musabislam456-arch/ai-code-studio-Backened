@@ -43,18 +43,20 @@ export function pickModelForTask(taskHint = {}) {
   return "gemini-3.8-flash";
 }
 
+// Only 3.x-series models are in the automatic fallback chain. The 2.5-series
+// models are still selectable manually in the dropdown, but Google has
+// started blocking some of them for newer API keys/accounts ("no longer
+// available to new users") ahead of their Oct 16, 2026 retirement, so they
+// are not worth burning fallback attempts on automatically.
 export const FALLBACK_CHAIN = [
   "gemini-3.8-flash",
   "gemini-3.7-flash",
   "gemini-3.6-flash",
   "gemini-3.5-flash",
   "gemini-3-flash-preview",
-  "gemini-2.5-flash",
   "gemini-3.1-pro-preview",
-  "gemini-2.5-pro",
   "gemini-3.5-flash-lite",
-  "gemini-3.1-flash-lite",
-  "gemini-2.5-flash-lite"
+  "gemini-3.1-flash-lite"
 ];
 
 export function buildFallbackOrder(preferredModelId) {

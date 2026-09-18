@@ -4,7 +4,7 @@ const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta";
 
 export async function callGemini({ apiKey, modelId, contents, systemInstruction, tools }) {
   const order = buildFallbackOrder(modelId);
-  let lastError;
+  const attempts = [];
 
   for (const candidate of order) {
     try {
@@ -24,21 +24,31 @@ export async function callGemini({ apiKey, modelId, contents, systemInstruction,
       );
 
       if (!res.ok) {
-        if (res.status === 429 || res.status >= 500) {
-          lastError = new Error(`Model ${candidate} failed with ${res.status}`);
-          continue;
-        }
         const body = await res.text();
-        throw new Error(`Gemini error ${res.status}: ${body}`);
+        attempts.push({ model: candidate, status: res.status, body });
+        // Any failure (404 retired, 429 quota, 400 bad request, 5xx server
+        // error, access-not-granted, etc.) moves on to the next candidate
+        // in the fallback chain instead of aborting the whole request.
+        continue;
       }
 
       const data = await res.json();
-      return { usedModel: candidate, data };
+      return { usedModel: candidate, data, fallbackUsed: candidate !== modelId, attempts };
     } catch (err) {
-      lastError = err;
+      attempts.push({ model: candidate, status: null, body: err.message });
       continue;
     }
   }
 
-  throw lastError || new Error("All models in fallback chain failed.");
+  // Every candidate failed. Surface the error for the model the user
+  // actually picked (attempts[0]) first — that's the one they need to
+  // act on — and summarize how many fallbacks were also tried.
+  const primary = attempts[0];
+  const primaryMsg = primary?.body || "unknown error";
+  const extra = attempts.length > 1
+    ? ` (${attempts.length - 1} fallback model(s) also failed: ${attempts.slice(1).map(a => a.model).join(", ")})`
+    : "";
+  const err = new Error(`All models failed. First tried "${primary?.model}" → ${primary?.status ?? "network error"}: ${primaryMsg}${extra}`);
+  err.attempts = attempts;
+  throw err;
 }
