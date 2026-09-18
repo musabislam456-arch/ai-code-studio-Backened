@@ -4,6 +4,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { ALL_MODELS, pickModelForTask } from "../config/models.js";
 import { callGemini } from "../services/gemini.js";
+import { runAgentLoop } from "../services/agent.js";
 import {
   initRepo, commitAll, push, pull, addRemote, createGithubRepo, status, log
 } from "../services/git.js";
@@ -46,6 +47,56 @@ router.post("/chat", async (req, res) => {
     res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// Agentic chat — same idea as /chat, but the model can actually read/write
+// files, list the tree, delete files, and run shell commands against the
+// workspace, and every step (tool call + its result) is streamed to the
+// client live over SSE as it happens, instead of only returning a final
+// blob once everything is done.
+router.post("/agent/chat", async (req, res) => {
+  const { workspace, modelId, messages, systemInstruction } = req.body;
+  const apiKey = process.env.GEMINI_API_KEY;
+
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache, no-transform");
+  res.setHeader("Connection", "keep-alive");
+  res.flushHeaders?.();
+
+  const send = (event) => {
+    res.write(`data: ${JSON.stringify(event)}\n\n`);
+  };
+
+  if (!apiKey) {
+    send({ type: "error", message: "GEMINI_API_KEY not set on server." });
+    return res.end();
+  }
+
+  const workspaceDir = workspacePath(workspace);
+  fs.mkdirSync(workspaceDir, { recursive: true });
+
+  // Keep the connection alive through slow tool calls (e.g. npm install)
+  // so proxies/load balancers don't time it out.
+  const heartbeat = setInterval(() => res.write(": ping\n\n"), 15000);
+
+  req.on("close", () => clearInterval(heartbeat));
+
+  try {
+    const result = await runAgentLoop({
+      apiKey,
+      modelId,
+      workspaceDir,
+      messages,
+      systemInstruction,
+      onStep: send
+    });
+    send({ type: "final", text: result.text, usedModel: result.usedModel });
+  } catch (err) {
+    send({ type: "error", message: err.message });
+  } finally {
+    clearInterval(heartbeat);
+    res.end();
   }
 });
 
