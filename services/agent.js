@@ -72,7 +72,14 @@ const TOOLS = [
   }
 ];
 
-function makeToolExecutor(workspaceDir) {
+function safePath(root, relPath) {
+  const base = path.resolve(root);
+  const full = path.resolve(root, String(relPath || ""));
+  if (full !== base && !full.startsWith(base + path.sep)) throw new Error("Path is outside the workspace.");
+  return full;
+}
+
+function makeToolExecutor(workspaceDir, onStep) {
   return async function execTool(name, args = {}) {
     switch (name) {
       case "read_file":
@@ -83,7 +90,7 @@ function makeToolExecutor(workspaceDir) {
         return { ok: true, path: args.path, bytes: (args.content ?? "").length };
 
       case "list_files": {
-        const dir = args.path ? path.join(workspaceDir, args.path) : workspaceDir;
+        const dir = args.path ? safePath(workspaceDir, args.path) : workspaceDir;
         fs.mkdirSync(dir, { recursive: true });
         return { tree: listTree(dir, workspaceDir) };
       }
@@ -93,7 +100,7 @@ function makeToolExecutor(workspaceDir) {
         return { ok: true, path: args.path };
 
       case "run_command":
-        return await runCommandBounded(args.command, workspaceDir, COMMAND_TIMEOUT_MS);
+        return await runCommandBounded(args.command, workspaceDir, COMMAND_TIMEOUT_MS, (stream, data) => onStep({ type: "command_output", tool: "run_command", stream, data }));
 
       default:
         return { error: `Unknown tool: ${name}` };
@@ -132,7 +139,7 @@ async function callModelOnce({ apiKey, modelId, contents, systemInstruction }) {
  */
 export async function runAgentLoop({ apiKey, modelId, workspaceDir, messages, systemInstruction, onStep }) {
   const order = buildFallbackOrder(modelId);
-  const execTool = makeToolExecutor(workspaceDir);
+  const execTool = makeToolExecutor(workspaceDir, onStep);
 
   let contents = messages.map((m) => ({
     role: m.role === "assistant" ? "model" : "user",
