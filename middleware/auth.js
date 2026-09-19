@@ -2,7 +2,7 @@ import { getUserBySession } from "../services/db.js";
 
 function bearer(req) {
   const h=req.headers.authorization||"";
-  return h.startsWith("Bearer ") ? h.slice(7) : "";
+  return h.startsWith("Bearer ") ? h.slice(7) : (req.query?.token ? String(req.query.token) : "");
 }
 
 export async function requireAuth(req,res,next) {
