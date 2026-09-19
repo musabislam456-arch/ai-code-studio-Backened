@@ -107,24 +107,20 @@ router.post("/agent/chat", async (req, res) => {
   const { workspace, modelId, messages, systemInstruction } = req.body;
   const apiKey = process.env.GEMINI_API_KEY;
 
+  if (!(await ensureProject(req, res, workspace))) return;
+  if (!apiKey) return res.status(400).json({ error: "GEMINI_API_KEY not set on server." });
+
+  const workspaceDir = workspacePath(req, workspace);
+  fs.mkdirSync(workspaceDir, { recursive: true });
+
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache, no-transform");
   res.setHeader("Connection", "keep-alive");
   res.flushHeaders?.();
 
   const send = (event) => {
-    res.write(`data: ${JSON.stringify(event)}\n\n`);
+    if (!res.writableEnded) res.write(`data: ${JSON.stringify(event)}\n\n`);
   };
-
-  if (!apiKey) {
-    send({ type: "error", message: "GEMINI_API_KEY not set on server." });
-    return res.end();
-  }
-
-  const workspaceDir = workspacePath(req, workspace);
-  fs.mkdirSync(workspaceDir, { recursive: true });
-
-  if (!(await ensureProject(req, res, workspace))) return;
 
   // Keep the connection alive through slow tool calls (e.g. npm install)
   // so proxies/load balancers don't time it out.
