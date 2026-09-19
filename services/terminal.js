@@ -8,7 +8,7 @@ import { spawn } from "node:child_process";
  * and resolves once with the full result so the agent loop can read it and
  * decide what to do next.
  */
-export function runCommandBounded(command, cwd, timeoutMs = 25000) {
+export function runCommandBounded(command, cwd, timeoutMs = 25000, onOutput = null) {
   return new Promise((resolve) => {
     let stdout = "";
     let stderr = "";
@@ -25,11 +25,15 @@ export function runCommandBounded(command, cwd, timeoutMs = 25000) {
     // or the response payload — keep the last 20kb of each stream.
     const MAX_LEN = 20000;
     child.stdout.on("data", (d) => {
-      stdout += d.toString();
+      const chunk=d.toString();
+      onOutput?.("stdout", chunk);
+      stdout += chunk;
       if (stdout.length > MAX_LEN) stdout = stdout.slice(-MAX_LEN);
     });
     child.stderr.on("data", (d) => {
-      stderr += d.toString();
+      const chunk=d.toString();
+      onOutput?.("stderr", chunk);
+      stderr += chunk;
       if (stderr.length > MAX_LEN) stderr = stderr.slice(-MAX_LEN);
     });
 
