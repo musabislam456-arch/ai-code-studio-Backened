@@ -13,12 +13,16 @@ const MAX_OUTPUT_TOKENS = 8192;
 
 // Hard cap on how many tool round-trips one agent turn can take, so a
 // confused model can't loop forever burning API calls.
-const MAX_TOOL_TURNS = 14;
+export const MAX_TOOL_TURNS = 14;
 
 // How long a single run_command call is allowed to run before it's killed.
-const COMMAND_TIMEOUT_MS = 25000;
+export const COMMAND_TIMEOUT_MS = 25000;
 
-const FUNCTION_DECLARATIONS = [
+// Tool set, in Gemini's function-declaration shape. services/ollama.js
+// converts this same list into OpenAI/Ollama tool-schema shape so both
+// providers advertise identical tools with identical names/args — keep this
+// as the single source of truth when adding/changing a tool.
+export const FUNCTION_DECLARATIONS = [
       {
         name: "read_file",
         description: "Read the full text content of one file in the workspace, given its path relative to the workspace root.",
@@ -82,14 +86,17 @@ function emitGrounding(data, onStep) {
   if (sources.length) onStep({ type: "web_sources", sources });
 }
 
-function safePath(root, relPath) {
+export function safePath(root, relPath) {
   const base = path.resolve(root);
   const full = path.resolve(root, String(relPath || ""));
   if (full !== base && !full.startsWith(base + path.sep)) throw new Error("Path is outside the workspace.");
   return full;
 }
 
-function makeToolExecutor(workspaceDir, onStep) {
+// Shared by both the Gemini loop below and services/ollama.js — the actual
+// filesystem/command side-effects of a tool call are provider-agnostic, only
+// the request/response wire format around them differs.
+export function makeToolExecutor(workspaceDir, onStep) {
   return async function execTool(name, args = {}) {
     switch (name) {
       case "read_file":

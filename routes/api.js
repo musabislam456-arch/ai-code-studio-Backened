@@ -5,6 +5,7 @@ import fs from "node:fs";
 import { ALL_MODELS, pickModelForTask } from "../config/models.js";
 import { callGemini } from "../services/gemini.js";
 import { runAgentLoop } from "../services/agent.js";
+import { callOllamaChat, runOllamaAgentLoop } from "../services/ollama.js";
 import { listProjects, getProject, createProject, renameProject, deleteProject, touchProject } from "../services/db.js";
 import {
   initRepo, commitAll, push, pull, addRemote, createGithubRepo, status, log
@@ -83,6 +84,16 @@ router.post("/models/auto-pick", (req, res) => {
 router.post("/chat", async (req, res) => {
   try {
     const { workspace, modelId, messages, systemInstruction } = req.body;
+    const isOllama = modelId?.startsWith("ollama:");
+
+    if (isOllama) {
+      const apiKey = process.env.OLLAMA_API_KEY;
+      if (!apiKey) return res.status(400).json({ error: "OLLAMA_API_KEY not set on server." });
+      const chatMessages = messages.map((m) => ({ role: m.role === "assistant" ? "assistant" : "user", content: m.content }));
+      const result = await callOllamaChat({ apiKey, modelId, messages: chatMessages, systemInstruction });
+      return res.json(result);
+    }
+
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) return res.status(400).json({ error: "GEMINI_API_KEY not set on server." });
 
@@ -105,10 +116,13 @@ router.post("/chat", async (req, res) => {
 // blob once everything is done.
 router.post("/agent/chat", async (req, res) => {
   const { workspace, modelId, messages, systemInstruction } = req.body;
-  const apiKey = process.env.GEMINI_API_KEY;
+  const isOllama = modelId?.startsWith("ollama:");
+  const apiKey = isOllama ? process.env.OLLAMA_API_KEY : process.env.GEMINI_API_KEY;
 
   if (!(await ensureProject(req, res, workspace))) return;
-  if (!apiKey) return res.status(400).json({ error: "GEMINI_API_KEY not set on server." });
+  if (!apiKey) {
+    return res.status(400).json({ error: isOllama ? "OLLAMA_API_KEY not set on server." : "GEMINI_API_KEY not set on server." });
+  }
 
   const workspaceDir = workspacePath(req, workspace);
   fs.mkdirSync(workspaceDir, { recursive: true });
@@ -129,7 +143,8 @@ router.post("/agent/chat", async (req, res) => {
   req.on("close", () => clearInterval(heartbeat));
 
   try {
-    const result = await runAgentLoop({
+    const loop = isOllama ? runOllamaAgentLoop : runAgentLoop;
+    const result = await loop({
       apiKey,
       modelId,
       workspaceDir,

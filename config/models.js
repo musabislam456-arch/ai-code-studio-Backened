@@ -29,7 +29,40 @@ export const MODELS = {
   ]
 };
 
-export const ALL_MODELS = [...MODELS.pro, ...MODELS.flash, ...MODELS.flashLite];
+// Ollama Cloud models (free tier, called via services/ollama.js using
+// OLLAMA_API_KEY). The "ollama:" prefix on the id is how routes/api.js and
+// services/agent.js tell these apart from Gemini model ids and route the
+// request to the right provider — the part after the first colon is the
+// exact tag Ollama expects (it may itself contain a colon, e.g. "480b-cloud").
+// Verified live against ollama.com/search?c=cloud and docs.ollama.com/cloud.
+export const OLLAMA_MODELS = [
+  {
+    id: "ollama:qwen3-coder:480b-cloud",
+    label: "Qwen3 Coder 480B (Ollama Cloud, free)",
+    tier: "ollama",
+    provider: "ollama",
+    contextIn: 262000,
+    notes: "Best free agentic coding model on Ollama — full tool-calling support, recommended default for the agent."
+  },
+  {
+    id: "ollama:gpt-oss:120b-cloud",
+    label: "GPT-OSS 120B (Ollama Cloud, free)",
+    tier: "ollama",
+    provider: "ollama",
+    contextIn: 128000,
+    notes: "Strong general reasoning + coding, medium free-tier usage."
+  },
+  {
+    id: "ollama:gpt-oss:20b-cloud",
+    label: "GPT-OSS 20B (Ollama Cloud, free, lightweight)",
+    tier: "ollama",
+    provider: "ollama",
+    contextIn: 128000,
+    notes: "Lightest free-tier model — pick this if larger models hit Ollama's free-tier rate limit on big tool-heavy requests."
+  }
+];
+
+export const ALL_MODELS = [...MODELS.pro, ...MODELS.flash, ...MODELS.flashLite, ...OLLAMA_MODELS];
 
 export function pickModelForTask(taskHint = {}) {
   const { needsDeepReasoning, isQuickEdit, inputTokensEstimate = 0 } = taskHint;
