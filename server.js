@@ -49,9 +49,12 @@ wss.on("connection",async(ws,req)=>{
   });
 });
 
-if(process.env.DATABASE_URL){
-  initDb().then(()=>console.log("Database initialized.")).catch(err=>console.error("Database init failed:",err.message));
-}
-
 const PORT=process.env.PORT||5175;
-server.listen(PORT,()=>console.log(`AI Code Studio backend running on http://localhost:${PORT}`));
+async function start(){
+  if(process.env.DATABASE_URL){
+    try { await initDb(); console.log("Database initialized."); }
+    catch(err) { console.error("Database init failed:",err.message); }
+  }
+  server.listen(PORT,()=>console.log(`AI Code Studio backend running on http://localhost:${PORT}`));
+}
+start();
