@@ -168,8 +168,10 @@ router.post("/workspace/:name/github/create-repo", async (req, res) => {
     const token = process.env.GITHUB_TOKEN;
     if (!token) return res.status(400).json({ error: "GITHUB_TOKEN not set on server." });
     const { repoName, description, isPrivate } = req.body;
+    const workspaceDir = workspacePath(req.params.name);
+    await initRepo(workspaceDir);
     const result = await createGithubRepo({ token, name: repoName, description, isPrivate });
-    await addRemote(workspacePath(req.params.name), result.authedCloneUrl);
+    await addRemote(workspaceDir, result.authedCloneUrl);
     res.json({ htmlUrl: result.htmlUrl, cloneUrl: result.cloneUrl });
   } catch (err) {
     res.status(500).json({ error: err.message });
