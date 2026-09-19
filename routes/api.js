@@ -166,25 +166,28 @@ router.get("/workspace/:name/file", async (req, res) => {
   }
 });
 
-router.post("/workspace/:name/file", (req, res) => {
-  const dir = workspacePath(req.params.name);
+router.post("/workspace/:name/file", async (req, res) => {
+  if (!(await ensureProject(req,res,req.params.name))) return;
+  const dir = workspacePath(req, req.params.name);
   const { path: relPath, content } = req.body;
   res.json(writeFile(dir, relPath, content));
 });
 
-router.delete("/workspace/:name/file", (req, res) => {
-  const dir = workspacePath(req.params.name);
+router.delete("/workspace/:name/file", async (req, res) => {
+  if (!(await ensureProject(req,res,req.params.name))) return;
+  const dir = workspacePath(req, req.params.name);
   res.json(deleteFile(dir, req.query.path));
 });
 
-router.post("/workspace/:name/upload-zip", upload.single("file"), (req, res) => {
-  const dir = workspacePath(req.params.name);
+router.post("/workspace/:name/upload-zip", upload.single("file"), async (req, res) => {
+  if (!(await ensureProject(req,res,req.params.name))) return;
+  const dir = workspacePath(req, req.params.name);
   fs.mkdirSync(dir, { recursive: true });
   res.json(extractZip(req.file.path, dir));
 });
 
 router.get("/workspace/:name/download-zip", async (req, res) => {
-  const dir = workspacePath(req.params.name);
+  const dir = workspacePath(req, req.params.name);
   const outZip = path.join("/tmp", `${req.params.name}-${Date.now()}.zip`);
   await createZip(dir, outZip);
   res.download(outZip);
@@ -192,32 +195,32 @@ router.get("/workspace/:name/download-zip", async (req, res) => {
 
 router.post("/workspace/:name/git/init", async (req, res) => {
   if (!(await ensureProject(req,res,req.params.name))) return;
-  res.json(await initRepo(workspacePath(req.params.name)));
+  res.json(await initRepo(workspacePath(req, req.params.name)));
 });
 
 router.post("/workspace/:name/git/commit", async (req, res) => {
   if (!(await ensureProject(req,res,req.params.name))) return;
-  res.json(await commitAll(workspacePath(req.params.name), req.body.message));
+  res.json(await commitAll(workspacePath(req, req.params.name), req.body.message));
 });
 
 router.post("/workspace/:name/git/push", async (req, res) => {
   if (!(await ensureProject(req,res,req.params.name))) return;
-  res.json(await push(workspacePath(req.params.name), req.body.remote, req.body.branch));
+  res.json(await push(workspacePath(req, req.params.name), req.body.remote, req.body.branch));
 });
 
 router.post("/workspace/:name/git/pull", async (req, res) => {
   if (!(await ensureProject(req,res,req.params.name))) return;
-  res.json(await pull(workspacePath(req.params.name), req.body.remote, req.body.branch));
+  res.json(await pull(workspacePath(req, req.params.name), req.body.remote, req.body.branch));
 });
 
 router.post("/workspace/:name/git/status", async (req, res) => {
   if (!(await ensureProject(req,res,req.params.name))) return;
-  res.json(await status(workspacePath(req.params.name)));
+  res.json(await status(workspacePath(req, req.params.name)));
 });
 
 router.post("/workspace/:name/git/log", async (req, res) => {
   if (!(await ensureProject(req,res,req.params.name))) return;
-  res.json(await log(workspacePath(req.params.name)));
+  res.json(await log(workspacePath(req, req.params.name)));
 });
 
 router.post("/workspace/:name/github/create-repo", async (req, res) => {
