@@ -18,9 +18,7 @@ const MAX_TOOL_TURNS = 14;
 // How long a single run_command call is allowed to run before it's killed.
 const COMMAND_TIMEOUT_MS = 25000;
 
-const TOOLS = [
-  {
-    functionDeclarations: [
+const FUNCTION_DECLARATIONS = [
       {
         name: "read_file",
         description: "Read the full text content of one file in the workspace, given its path relative to the workspace root.",
@@ -68,9 +66,21 @@ const TOOLS = [
           required: ["command"]
         }
       }
-    ]
-  }
+  ];
+
+const TOOLS = [
+  { function_declarations: FUNCTION_DECLARATIONS },
+  { google_search: {} }
 ];
+
+function emitGrounding(data, onStep) {
+  const gm = data?.candidates?.[0]?.groundingMetadata;
+  for (const query of gm?.webSearchQueries || []) onStep({ type: "web_search", query });
+  const sources = (gm?.groundingChunks || [])
+    .map(c => c?.web ? { title: c.web.title || "", uri: c.web.uri || "" } : null)
+    .filter(Boolean);
+  if (sources.length) onStep({ type: "web_sources", sources });
+}
 
 function safePath(root, relPath) {
   const base = path.resolve(root);
@@ -162,6 +172,7 @@ export async function runAgentLoop({ apiKey, modelId, workspaceDir, messages, sy
         onStep({ type: "status", text: "Soch raha hoon..." });
       }
       data = await callModelOnce({ apiKey, modelId: candidate, contents, systemInstruction });
+      emitGrounding(data, onStep);
       chosenModel = candidate;
       break;
     } catch (err) {
@@ -233,5 +244,6 @@ export async function runAgentLoop({ apiKey, modelId, workspaceDir, messages, sy
 
     onStep({ type: "status", text: "Agla step soch raha hoon..." });
     data = await callModelOnce({ apiKey, modelId: chosenModel, contents, systemInstruction });
+    emitGrounding(data, onStep);
   }
 }
