@@ -3,7 +3,7 @@ import bcrypt from "bcryptjs";
 import { OAuth2Client } from "google-auth-library";
 import {
   findUserByEmail, findUserByGoogleSub, createUser, linkGoogleToUser,
-  createSession, createOAuthCode, consumeOAuthCode, deleteSession
+  createSession, createOAuthCode, consumeOAuthCode, deleteSession, getUserBySession
 } from "../services/db.js";
 import { requireUser } from "../middleware/auth.js";
 
@@ -103,11 +103,9 @@ router.post("/google/exchange", async (req,res) => {
     if (!code) return res.status(400).json({error:"Missing exchange code."});
     const userId=await consumeOAuthCode(code);
     if (!userId) return res.status(400).json({error:"Google login code expired or already used."});
-    const fakeSession=await createSession(userId);
-    const user=await findUserByGoogleSub((await (async()=>{return null})()));
-    // Fetch the user through session to avoid duplicating a second lookup API.
-    const sessionUser=await import("../services/db.js").then(m=>m.getUserBySession(fakeSession));
-    res.json({token:fakeSession,user:publicUser(sessionUser)});
+    const token=await createSession(userId);
+    const user=await getUserBySession(token);
+    res.json({token,user:publicUser(user)});
   } catch(err) { res.status(500).json({error:err.message}); }
 });
 
