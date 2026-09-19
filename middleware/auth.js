@@ -1,31 +1,37 @@
-/**
- * Very simple shared-secret auth. Not enterprise-grade, but stops
- * randoms on the internet from running shell commands on your
- * server. Set APP_ACCESS_TOKEN in your environment; the frontend
- * sends it back on every request and on the terminal websocket.
- */
-export function requireAuth(req, res, next) {
-  const expected = process.env.APP_ACCESS_TOKEN;
-  if (!expected) {
-    // No token configured -> auth disabled (fine for local dev only).
-    return next();
-  }
-  const header = req.headers.authorization || "";
-  const fromHeader = header.startsWith("Bearer ") ? header.slice(7) : null;
-  const provided = fromHeader || req.query.token || null;
-  if (provided !== expected) {
-    return res.status(401).json({ error: "Unauthorized" });
-  }
-  next();
+import { getUserBySession } from "../services/db.js";
+
+function bearer(req) {
+  const h=req.headers.authorization||"";
+  return h.startsWith("Bearer ") ? h.slice(7) : "";
 }
 
-export function checkWsToken(urlString) {
-  const expected = process.env.APP_ACCESS_TOKEN;
-  if (!expected) return true; // auth disabled locally
+/**
+ * requireAuth accepts the legacy APP_ACCESS_TOKEN for internal/local access,
+ * otherwise it requires a signed-in user session from the database.
+ */
+export async function requireAuth(req,res,next) {
   try {
-    const url = new URL(urlString, "http://localhost");
-    return url.searchParams.get("token") === expected;
-  } catch {
-    return false;
+    const token=bearer(req);
+    if (process.env.APP_ACCESS_TOKEN && token===process.env.APP_ACCESS_TOKEN) {
+      req.user={id:"legacy",email:null,name:"Legacy access",isLegacy:true};
+      return next();
+    }
+    const user=await getUserBySession(token);
+    if (!user) return res.status(401).json({error:"Unauthorized — please sign in."});
+    req.user=user;
+    next();
+  } catch(err) {
+    res.status(500).json({error:err.message});
   }
+}
+
+export const requireUser=requireAuth;
+
+export function checkWsToken(urlString) {
+  const expected=process.env.APP_ACCESS_TOKEN;
+  if (!expected) return true;
+  try {
+    const url=new URL(urlString,"http://localhost");
+    return url.searchParams.get("token")===expected;
+  } catch { return false; }
 }
