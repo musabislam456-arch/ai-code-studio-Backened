@@ -24,9 +24,10 @@ const WORKSPACES_ROOT=path.resolve(process.env.WORKSPACES_ROOT||path.join(proces
 fs.mkdirSync(WORKSPACES_ROOT,{recursive:true});
 
 function workspacePath(user,projectId){
-  const userPart=String(user?.id||"legacy").replace(/[^a-zA-Z0-9_-]/g,"");
   const projectPart=String(projectId||"my-project").replace(/[^a-zA-Z0-9_-]/g,"");
-  const full=path.resolve(WORKSPACES_ROOT,userPart,projectPart);
+  const full=user?.isLegacy
+    ? path.resolve(WORKSPACES_ROOT,projectPart)
+    : path.resolve(WORKSPACES_ROOT,String(user?.id||"").replace(/[^a-zA-Z0-9_-]/g,""),projectPart);
   if(!full.startsWith(WORKSPACES_ROOT+path.sep)) throw new Error("Invalid workspace.");
   fs.mkdirSync(full,{recursive:true});
   return full;
