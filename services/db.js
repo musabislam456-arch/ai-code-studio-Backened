@@ -3,20 +3,62 @@ import crypto from "node:crypto";
 
 const { Pool } = pg;
 let pool;
+let activeSource = null;
+
+function resolveConnectionString(preferPublic = false) {
+  // DATABASE_URL is normally Railway's private hostname (*.railway.internal),
+  // which only resolves when this service and Postgres share the same
+  // Railway project + environment. DATABASE_PUBLIC_URL (TCP proxy URL from
+  // Postgres -> Settings -> Networking -> Public Networking) always works,
+  // from anywhere, at the cost of going over the public internet.
+  if (preferPublic && process.env.DATABASE_PUBLIC_URL) {
+    return { url: process.env.DATABASE_PUBLIC_URL, source: "DATABASE_PUBLIC_URL" };
+  }
+  if (process.env.DATABASE_URL) return { url: process.env.DATABASE_URL, source: "DATABASE_URL" };
+  if (process.env.DATABASE_PUBLIC_URL) return { url: process.env.DATABASE_PUBLIC_URL, source: "DATABASE_PUBLIC_URL" };
+  return null;
+}
+
+function buildPool(url) {
+  return new Pool({
+    connectionString: url,
+    ssl: process.env.DATABASE_SSL === "false" ? false : { rejectUnauthorized: false },
+    connectionTimeoutMillis: 8000
+  });
+}
 
 function getPool() {
-  if (!pool) {
-    if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL not set. Add a Railway PostgreSQL connection string.");
-    pool = new Pool({
-      connectionString: process.env.DATABASE_URL,
-      ssl: process.env.DATABASE_SSL === "false" ? false : { rejectUnauthorized: false }
-    });
-  }
+  if (pool) return pool;
+  const resolved = resolveConnectionString();
+  if (!resolved) throw new Error("DATABASE_URL not set. Add a Railway PostgreSQL connection string.");
+  activeSource = resolved.source;
+  pool = buildPool(resolved.url);
+  pool.on("error", err => console.error(`[db] pool error (source=${activeSource}):`, err.message));
   return pool;
 }
 
+function isPrivateHostnameFailure(err) {
+  return err && (err.code === "ENOTFOUND" || err.code === "EAI_AGAIN") && /railway\.internal/i.test(err.hostname || err.message || "");
+}
+
 export async function initDb() {
-  const db = getPool();
+  let db = getPool();
+  try {
+    await db.query("SELECT 1");
+  } catch (err) {
+    if (isPrivateHostnameFailure(err) && activeSource === "DATABASE_URL" && process.env.DATABASE_PUBLIC_URL) {
+      console.warn(`[db] Could not resolve ${err.hostname || "postgres.railway.internal"} (private networking unreachable). Retrying with DATABASE_PUBLIC_URL...`);
+      try { await pool.end(); } catch {}
+      pool = buildPool(process.env.DATABASE_PUBLIC_URL);
+      activeSource = "DATABASE_PUBLIC_URL (fallback)";
+      pool.on("error", e => console.error(`[db] pool error (source=${activeSource}):`, e.message));
+      db = pool;
+      await db.query("SELECT 1");
+    } else {
+      throw err;
+    }
+  }
+  console.log(`[db] Connected via ${activeSource}.`);
   await db.query(`
     CREATE TABLE IF NOT EXISTS users (
       id uuid PRIMARY KEY,
