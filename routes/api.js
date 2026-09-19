@@ -8,7 +8,7 @@ import { runAgentLoop } from "../services/agent.js";
 import { callOllamaChat, runOllamaAgentLoop } from "../services/ollama.js";
 import { listProjects, getProject, createProject, renameProject, deleteProject, touchProject } from "../services/db.js";
 import {
-  initRepo, commitAll, push, pull, addRemote, createGithubRepo, status, log
+  initRepo, commitAll, push, pull, addRemote, unlinkRemote, getRemoteInfo, createGithubRepoAndPush, status, log
 } from "../services/git.js";
 import {
   listTree, readFile, writeFile, deleteFile, extractZip, createZip
@@ -109,11 +109,6 @@ router.post("/chat", async (req, res) => {
   }
 });
 
-// Agentic chat — same idea as /chat, but the model can actually read/write
-// files, list the tree, delete files, and run shell commands against the
-// workspace, and every step (tool call + its result) is streamed to the
-// client live over SSE as it happens, instead of only returning a final
-// blob once everything is done.
 router.post("/agent/chat", async (req, res) => {
   const { workspace, modelId, messages, systemInstruction } = req.body;
   const isOllama = modelId?.startsWith("ollama:");
@@ -135,23 +130,12 @@ router.post("/agent/chat", async (req, res) => {
   const send = (event) => {
     if (!res.writableEnded) res.write(`data: ${JSON.stringify(event)}\n\n`);
   };
-
-  // Keep the connection alive through slow tool calls (e.g. npm install)
-  // so proxies/load balancers don't time it out.
   const heartbeat = setInterval(() => res.write(": ping\n\n"), 15000);
-
   req.on("close", () => clearInterval(heartbeat));
 
   try {
     const loop = isOllama ? runOllamaAgentLoop : runAgentLoop;
-    const result = await loop({
-      apiKey,
-      modelId,
-      workspaceDir,
-      messages,
-      systemInstruction,
-      onStep: send
-    });
+    const result = await loop({ apiKey, modelId, workspaceDir, messages, systemInstruction, onStep: send });
     send({ type: "final", text: result.text, usedModel: result.usedModel });
   } catch (err) {
     send({ type: "error", message: err.message });
@@ -171,11 +155,8 @@ router.get("/workspace/:name/tree", async (req, res) => {
 router.get("/workspace/:name/file", async (req, res) => {
   if (!(await ensureProject(req,res,req.params.name))) return;
   const dir = workspacePath(req, req.params.name);
-  try {
-    res.json({ content: readFile(dir, req.query.path) });
-  } catch (err) {
-    res.status(404).json({ error: err.message });
-  }
+  try { res.json({ content: readFile(dir, req.query.path) }); }
+  catch (err) { res.status(404).json({ error: err.message }); }
 });
 
 router.post("/workspace/:name/file", async (req, res) => {
@@ -235,20 +216,34 @@ router.post("/workspace/:name/git/log", async (req, res) => {
   res.json(await log(workspacePath(req, req.params.name)));
 });
 
+router.get("/workspace/:name/github", async (req, res) => {
+  if (!(await ensureProject(req,res,req.params.name))) return;
+  try {
+    await initRepo(workspacePath(req, req.params.name));
+    res.json(await getRemoteInfo(workspacePath(req, req.params.name), "origin"));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 router.post("/workspace/:name/github/create-repo", async (req, res) => {
   if (!(await ensureProject(req,res,req.params.name))) return;
   try {
     const token = process.env.GITHUB_TOKEN;
     if (!token) return res.status(400).json({ error: "GITHUB_TOKEN not set on server." });
-    const { repoName, description, isPrivate } = req.body;
+    const { repoName, description, isPrivate = true } = req.body;
+    if (!repoName?.trim()) return res.status(400).json({ error: "Repository name is required." });
     const workspaceDir = workspacePath(req, req.params.name);
-    await initRepo(workspaceDir);
-    const result = await createGithubRepo({ token, name: repoName, description, isPrivate });
-    await addRemote(workspaceDir, result.authedCloneUrl);
-    res.json({ htmlUrl: result.htmlUrl, cloneUrl: result.cloneUrl });
+    const result = await createGithubRepoAndPush({ token, name: repoName.trim(), description, isPrivate: Boolean(isPrivate), workspaceDir });
+    res.json({ htmlUrl: result.htmlUrl, cloneUrl: result.cloneUrl, pushed: result.pushed, branch: result.branch, connected: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+router.post("/workspace/:name/github/unlink", async (req, res) => {
+  if (!(await ensureProject(req,res,req.params.name))) return;
+  try {
+    res.json(await unlinkRemote(workspacePath(req, req.params.name), "origin"));
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 export default router;
