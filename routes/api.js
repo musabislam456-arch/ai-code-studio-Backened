@@ -5,6 +5,7 @@ import fs from "node:fs";
 import { ALL_MODELS, pickModelForTask } from "../config/models.js";
 import { callGemini } from "../services/gemini.js";
 import { runAgentLoop } from "../services/agent.js";
+import { listProjects, getProject, createProject, renameProject, deleteProject, touchProject } from "../services/db.js";
 import {
   initRepo, commitAll, push, pull, addRemote, createGithubRepo, status, log
 } from "../services/git.js";
@@ -18,10 +19,56 @@ const upload = multer({ dest: "/tmp/uploads" });
 const WORKSPACES_ROOT = process.env.WORKSPACES_ROOT || path.join(process.cwd(), "workspaces");
 fs.mkdirSync(WORKSPACES_ROOT, { recursive: true });
 
-function workspacePath(name) {
-  const safe = String(name).replace(/[^a-zA-Z0-9-_]/g, "");
-  return path.join(WORKSPACES_ROOT, safe);
+function workspacePath(req, name) {
+  const userPart = String(req.user?.id || "legacy").replace(/[^a-zA-Z0-9_-]/g, "");
+  const projectPart = String(name || "my-project").replace(/[^a-zA-Z0-9_-]/g, "");
+  const full = path.resolve(WORKSPACES_ROOT, userPart, projectPart);
+  if (!full.startsWith(path.resolve(WORKSPACES_ROOT) + path.sep)) throw new Error("Invalid workspace.");
+  fs.mkdirSync(full, { recursive: true });
+  return full;
 }
+
+async function ensureProject(req, res, projectId) {
+  if (req.user?.isLegacy) return true;
+  const project = await getProject(req.user.id, projectId);
+  if (!project) { res.status(404).json({ error: "Project not found." }); return false; }
+  return true;
+}
+
+router.get("/projects", async (req,res) => {
+  try {
+    if (req.user?.isLegacy) return res.json({ projects: [{ id:"my-project", name:"my-project" }] });
+    res.json({ projects: await listProjects(req.user.id) });
+  } catch(err) { res.status(500).json({error:err.message}); }
+});
+
+router.post("/projects", async (req,res) => {
+  try {
+    if (req.user?.isLegacy) return res.status(400).json({error:"Sign in to create saved projects."});
+    const project=await createProject(req.user.id, req.body?.name);
+    fs.mkdirSync(workspacePath(req,project.id),{recursive:true});
+    res.json({project});
+  } catch(err) { res.status(500).json({error:err.message}); }
+});
+
+router.patch("/projects/:id", async (req,res) => {
+  try {
+    if (req.user?.isLegacy) return res.status(400).json({error:"Sign in to rename saved projects."});
+    const project=await renameProject(req.user.id,req.params.id,req.body?.name);
+    if(!project) return res.status(404).json({error:"Project not found."});
+    res.json({project});
+  } catch(err) { res.status(500).json({error:err.message}); }
+});
+
+router.delete("/projects/:id", async (req,res) => {
+  try {
+    if (req.user?.isLegacy) return res.status(400).json({error:"Sign in to delete saved projects."});
+    if(!(await getProject(req.user.id,req.params.id))) return res.status(404).json({error:"Project not found."});
+    const deleted=await deleteProject(req.user.id,req.params.id);
+    fs.rmSync(workspacePath(req,req.params.id),{recursive:true,force:true});
+    res.json({ok:deleted});
+  } catch(err) { res.status(500).json({error:err.message}); }
+});
 
 router.get("/models", (req, res) => {
   res.json({ models: ALL_MODELS });
@@ -73,8 +120,10 @@ router.post("/agent/chat", async (req, res) => {
     return res.end();
   }
 
-  const workspaceDir = workspacePath(workspace);
+  const workspaceDir = workspacePath(req, workspace);
   fs.mkdirSync(workspaceDir, { recursive: true });
+
+  if (!(await ensureProject(req, res, workspace))) return;
 
   // Keep the connection alive through slow tool calls (e.g. npm install)
   // so proxies/load balancers don't time it out.
@@ -100,14 +149,16 @@ router.post("/agent/chat", async (req, res) => {
   }
 });
 
-router.get("/workspace/:name/tree", (req, res) => {
-  const dir = workspacePath(req.params.name);
+router.get("/workspace/:name/tree", async (req, res) => {
+  if (!(await ensureProject(req,res,req.params.name))) return;
+  const dir = workspacePath(req, req.params.name);
   fs.mkdirSync(dir, { recursive: true });
   res.json({ tree: listTree(dir) });
 });
 
-router.get("/workspace/:name/file", (req, res) => {
-  const dir = workspacePath(req.params.name);
+router.get("/workspace/:name/file", async (req, res) => {
+  if (!(await ensureProject(req,res,req.params.name))) return;
+  const dir = workspacePath(req, req.params.name);
   try {
     res.json({ content: readFile(dir, req.query.path) });
   } catch (err) {
@@ -140,35 +191,42 @@ router.get("/workspace/:name/download-zip", async (req, res) => {
 });
 
 router.post("/workspace/:name/git/init", async (req, res) => {
+  if (!(await ensureProject(req,res,req.params.name))) return;
   res.json(await initRepo(workspacePath(req.params.name)));
 });
 
 router.post("/workspace/:name/git/commit", async (req, res) => {
+  if (!(await ensureProject(req,res,req.params.name))) return;
   res.json(await commitAll(workspacePath(req.params.name), req.body.message));
 });
 
 router.post("/workspace/:name/git/push", async (req, res) => {
+  if (!(await ensureProject(req,res,req.params.name))) return;
   res.json(await push(workspacePath(req.params.name), req.body.remote, req.body.branch));
 });
 
 router.post("/workspace/:name/git/pull", async (req, res) => {
+  if (!(await ensureProject(req,res,req.params.name))) return;
   res.json(await pull(workspacePath(req.params.name), req.body.remote, req.body.branch));
 });
 
 router.post("/workspace/:name/git/status", async (req, res) => {
+  if (!(await ensureProject(req,res,req.params.name))) return;
   res.json(await status(workspacePath(req.params.name)));
 });
 
 router.post("/workspace/:name/git/log", async (req, res) => {
+  if (!(await ensureProject(req,res,req.params.name))) return;
   res.json(await log(workspacePath(req.params.name)));
 });
 
 router.post("/workspace/:name/github/create-repo", async (req, res) => {
+  if (!(await ensureProject(req,res,req.params.name))) return;
   try {
     const token = process.env.GITHUB_TOKEN;
     if (!token) return res.status(400).json({ error: "GITHUB_TOKEN not set on server." });
     const { repoName, description, isPrivate } = req.body;
-    const workspaceDir = workspacePath(req.params.name);
+    const workspaceDir = workspacePath(req, req.params.name);
     await initRepo(workspaceDir);
     const result = await createGithubRepo({ token, name: repoName, description, isPrivate });
     await addRemote(workspaceDir, result.authedCloneUrl);
