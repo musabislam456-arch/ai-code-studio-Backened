@@ -6,6 +6,7 @@ import { ALL_MODELS, pickModelForTask } from "../config/models.js";
 import { callGemini } from "../services/gemini.js";
 import { runAgentLoop } from "../services/agent.js";
 import { callOllamaChat, runOllamaAgentLoop } from "../services/ollama.js";
+import { getProviderForModel, envKeyName } from "../services/providers.js";
 import { listProjects, getProject, createProject, renameProject, deleteProject, touchProject } from "../services/db.js";
 import {
   initRepo, commitAll, push, pull, addRemote, unlinkRemote, getRemoteInfo, createGithubRepoAndPush, status, log
@@ -85,12 +86,22 @@ router.post("/chat", async (req, res) => {
   try {
     const { workspace, modelId, messages, systemInstruction } = req.body;
     const isOllama = modelId?.startsWith("ollama:");
+    const provider = !isOllama ? getProviderForModel(modelId) : null;
 
     if (isOllama) {
       const apiKey = process.env.OLLAMA_API_KEY;
       if (!apiKey) return res.status(400).json({ error: "OLLAMA_API_KEY not set on server." });
       const chatMessages = messages.map((m) => ({ role: m.role === "assistant" ? "assistant" : "user", content: m.content }));
       const result = await callOllamaChat({ apiKey, modelId, messages: chatMessages, systemInstruction });
+      return res.json(result);
+    }
+
+    if (provider) {
+      const keyName = envKeyName(provider.id);
+      const apiKey = process.env[keyName];
+      if (!apiKey) return res.status(400).json({ error: `${keyName} not set on server.` });
+      const chatMessages = messages.map((m) => ({ role: m.role === "assistant" ? "assistant" : "user", content: m.content }));
+      const result = await provider.callChat({ apiKey, modelId, messages: chatMessages, systemInstruction });
       return res.json(result);
     }
 
@@ -112,11 +123,13 @@ router.post("/chat", async (req, res) => {
 router.post("/agent/chat", async (req, res) => {
   const { workspace, modelId, messages, systemInstruction } = req.body;
   const isOllama = modelId?.startsWith("ollama:");
-  const apiKey = isOllama ? process.env.OLLAMA_API_KEY : process.env.GEMINI_API_KEY;
+  const provider = !isOllama ? getProviderForModel(modelId) : null;
+  const keyName = isOllama ? "OLLAMA_API_KEY" : provider ? envKeyName(provider.id) : "GEMINI_API_KEY";
+  const apiKey = process.env[keyName];
 
   if (!(await ensureProject(req, res, workspace))) return;
   if (!apiKey) {
-    return res.status(400).json({ error: isOllama ? "OLLAMA_API_KEY not set on server." : "GEMINI_API_KEY not set on server." });
+    return res.status(400).json({ error: `${keyName} not set on server.` });
   }
 
   const workspaceDir = workspacePath(req, workspace);
@@ -134,7 +147,7 @@ router.post("/agent/chat", async (req, res) => {
   req.on("close", () => clearInterval(heartbeat));
 
   try {
-    const loop = isOllama ? runOllamaAgentLoop : runAgentLoop;
+    const loop = isOllama ? runOllamaAgentLoop : provider ? provider.runAgentLoop : runAgentLoop;
     const result = await loop({ apiKey, modelId, workspaceDir, messages, systemInstruction, onStep: send });
     send({ type: "final", text: result.text, usedModel: result.usedModel });
   } catch (err) {
